@@ -7,6 +7,12 @@ const SimplexNoise = require('simplex-noise');
 const MarchingCubes = require('./utils/marchingCubes.js').MarchingCubes;
 const OrbitControls = require('./utils/orbitControls.js');
 
+const { sin, cos, sqrt, floor, random } = Math;
+
+const sqr = (x) => x * x;
+const nsin = (x) => 0.5 + 0.5 * sin(x);
+const log = (...args) => { console.log.apply(console, args); return args[0] };
+
 
 // Global State
 
@@ -23,7 +29,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xffffff);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 10000);
-camera.position.set(10, 10, 50);
+camera.position.set(-70, 10, 0);
 
 const renderer = new THREE.WebGLRenderer();
 renderer.outputEncoding = THREE.sRGBEncoding;
@@ -35,24 +41,45 @@ controls.minDistance = 50;
 controls.maxDistance = 500;
 
 
+// Loaders
+
+const textureLoader = new THREE.TextureLoader();
+
+const reflectionTex = textureLoader.load('img/2.jpg');
+reflectionTex.mapping = THREE.EquirectangularReflectionMapping;
+reflectionTex.encoding = THREE.sRGBEncoding;
+
+//scene.background = reflectionTex;
+
+
 // Scene Construction
 
-const material = new THREE.MeshStandardMaterial({
+const material = new THREE.MeshPhysicalMaterial({
   flatShading: true,
-  color: 0x111111,
+  color: 0x441111,
   metalness: 0.9,
   roughness: 0.2,
-  side: THREE.DoubleSide
+  //clearcoat: 0.4,
+  //claercoatMap: reflectionTex,
+  side: THREE.DoubleSide,
+  envMap: reflectionTex,
+  envMapIntensity: 3,
 });
 
+const cube = new THREE.Mesh(new THREE.BoxGeometry(36, 36, 36), new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true }));
+scene.add(cube);
 
 const light = new THREE.DirectionalLight(0x2222ff);
-light.position.set(50, 50, 0);
-scene.add(light);
+light.position.set(50, 0, 0);
+//scene.add(light);
 
 const pointLight = new THREE.PointLight(0xff2222);
-pointLight.position.set(0, 0, 100);
+pointLight.position.set(0, 0, 30);
 scene.add(pointLight);
+
+const plHelper = new THREE.PointLightHelper(pointLight);
+scene.add(plHelper);
+
 
 const ambientLight = new THREE.AmbientLight(0xffffff);
 //scene.add(ambientLight);
@@ -60,78 +87,75 @@ const ambientLight = new THREE.AmbientLight(0xffffff);
 
 // Marching Cubes
 
-const mesh = new MarchingCubes(globalState.resolution, material, true, true, 100000);
-mesh.position.set(0, 0, 0);
-mesh.scale.set(20, 20, 20);
-scene.add(mesh);
+const marching = new MarchingCubes(globalState.resolution, material, false, false, 100000);
+marching.position.set(0, 0, 0);
+marching.scale.set(20, 20, 20);
+scene.add(marching);
 
-const simplex = new SimplexNoise(Math.random());
+
+const simplex = new SimplexNoise(random());
 
 
 // Render Loop
 
-function update (Δt) {
+function update (Δt, time) {
   controls.update();
+
+
+  // Update ferroplane
+
+  marching.reset();
+
+  const res    = globalState.resolution;
+  const nScale = globalState.noiseScale;
+  let timeFactor = time + 1.7 * sqr(nsin(time/10));
+
+  for (let x = 0; x < res; x++) {
+    for (let y = 0; y < res; y++) {
+      for (let z = 0; z < res; z++) {
+        let value4d = simplex.noise4D(x/nScale, y/nScale - timeFactor/5, z/nScale, timeFactor / 10);
+        let value =
+          value4d
+          - 0.5 * (y/res)*(y/res)
+          - 0.5 * z/res;
+
+        marching.setCell(x, y, z, 1000 * value);
+      }
+    }
+  }
+
+  marching.addPlaneY(2, 12);
 }
 
 function render (Δt, time) {
-  updateCubes(mesh, time/1000, 10, true, false, false);
 	renderer.render(scene, camera);
 }
 
 
 // Frame Driver
 
-let time  = Date.now();
+let time  = 0;
+let mtime = Date.now();
 let start = Date.now();
 
-function animate () {
+function loop () {
   let now = Date.now();
-  let Δt = time - now;
-  time = now - start;
+  let Δt = mtime - now;
+  mtime = now - start;
+  time = mtime/1000;
   update(Δt, time);
   render(Δt, time);
-  if (globalState.running) requestAnimationFrame(animate);
+  if (globalState.running) requestAnimationFrame(loop);
 }
 
 
 // Init
 
-mesh.init(Math.floor(globalState.resolution));
+marching.init(floor(globalState.resolution));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
-animate();
+loop();
 
 
 // -------
-
-function updateCubes (object, time, numblobs, floor, wallx, wallz) {
-  object.reset();
-
-  const subtract = 12;
-  const strength = 1.2 / ((Math.sqrt(numblobs) - 1) / 4 + 1);
-
-  let cx = 8 + 4 *  Math.sin(time*10);
-  let cy = 8 + 4 *  Math.cos(time*10);
-  let cz = 8 + 4 * -Math.sin(time*10);
-
-  for (let x = 0; x < globalState.resolution; x++) {
-    for (let y = 0; y < globalState.resolution; y++) {
-      for (let z = 0; z < globalState.resolution; z++) {
-        let value4d = simplex.noise4D(
-          x/globalState.noiseScale,
-          y/globalState.noiseScale - time/5,
-          z/globalState.noiseScale,
-          time / 10);
-        object.setCell(x, y, z,
-          1000 * value4d
-          - 500 * y/globalState.resolution
-          - 500 * z/globalState.resolution
-        );
-      }
-    }
-  }
-
-  object.addPlaneY(2, 12);
-}
 
